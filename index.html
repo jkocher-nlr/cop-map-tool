@@ -178,12 +178,25 @@ async function filterToLand(pts) {
     'https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json'
   ).then(r => r.json());
 
-  const land = topojson.feature(topo, topo.objects.land);
+  // world-atlas land is a GeometryCollection; topojson.feature() returns
+  // a FeatureCollection here, so test each polygon feature individually.
+  const landFeature = topojson.feature(topo, topo.objects.land);
+  const landPolys = Array.isArray(landFeature.features)
+    ? landFeature.features
+    : [landFeature];
   setStatus('Filtering to land-only…', 32);
 
-  return pts.filter(p =>
-    turf.booleanPointInPolygon(turf.point([p.lon, p.lat]), land)
-  );
+  return pts.filter(p => {
+    const pt = turf.point([p.lon, p.lat]);
+    return landPolys.some(poly => {
+      if (!poly || !poly.geometry) return false;
+      try {
+        return turf.booleanPointInPolygon(pt, poly);
+      } catch {
+        return false;
+      }
+    });
+  });
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -380,7 +393,18 @@ async function main() {
     }).addTo(map);
 
     /* 5. Land grid */
-    const landPts = await filterToLand(generateGrid(GRID_DEG));
+    const gridPts = generateGrid(GRID_DEG);
+    let landPts;
+    try {
+      landPts = await filterToLand(gridPts);
+      if (!landPts.length) {
+        console.warn('Land filter returned no points; falling back to full grid.');
+        landPts = gridPts;
+      }
+    } catch (e) {
+      console.warn('Land filtering failed; falling back to full grid.', e);
+      landPts = gridPts;
+    }
 
     /* 6. Weather */
     setStatus(`Fetching weather for ${landPts.length} land points&hellip;`, 38);
@@ -389,6 +413,9 @@ async function main() {
     /* 7. COP */
     setStatus('Computing COP&hellip;', 75);
     const copData = computeAll(calcCop, landPts, temps);
+    if (!copData.length) {
+      throw new Error('No valid COP points were computed from current weather data.');
+    }
 
     /* 8. Heatmap */
     setStatus('Rendering heatmap&hellip;', 90);
