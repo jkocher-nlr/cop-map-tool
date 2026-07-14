@@ -139,7 +139,7 @@ const COP_SCALE_HI = 7.0;  // colour-scale upper bound
    Gradient: low intensity (0) → blue (high COP, cool climate)
              high intensity (1) → red (low COP, hot climate)  */
 const HEAT_OPTS = {
-  radius: 30, blur: 20, maxZoom: 18, max: 1.0, minOpacity: 0.45,
+  radius: 18, blur: 12, maxZoom: 18, max: 5.0, minOpacity: 0.45,
   gradient: {
     0.00: '#313695',
     0.30: '#74add1',
@@ -152,10 +152,12 @@ const HEAT_OPTS = {
 function bindHeatZoomBehavior(map, heatLayer) {
   function updateHeatStyle() {
     const z = map.getZoom();
-    // Increase blur/radius with zoom so sparse 5° points stay visible.
-    const radius = Math.max(30, Math.min(80, 30 + (z - 2) * 4));
-    const blur = Math.max(18, Math.min(50, 18 + (z - 2) * 2));
-    heatLayer.setOptions({ radius, blur, maxZoom: 18, max: 1.0, minOpacity: 0.45 });
+    // Keep low-zoom colours from saturating red due to point overlap,
+    // while still expanding the footprint as you zoom in.
+    const radius = Math.max(16, Math.min(42, 16 + (z - 2) * 2));
+    const blur = Math.max(10, Math.min(28, 10 + (z - 2) * 1.4));
+    const max = Math.max(2.0, 5.0 - (z - 2) * 0.25);
+    heatLayer.setOptions({ radius, blur, maxZoom: 18, max, minOpacity: 0.45 });
     heatLayer.redraw();
   }
 
