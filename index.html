@@ -132,8 +132,8 @@
 const T_SUPPLY    = 12.0;   // fixed supply-air temperature (°C)
 const GRID_DEG    = 5;      // heatmap grid resolution (degrees)
 const BATCH_SZ    = 100;    // Open-Meteo locations per request
-const COP_SCALE_LO = 2.0;  // colour-scale lower bound
-const COP_SCALE_HI = 15.0; // colour-scale upper bound
+const COP_SCALE_LO = 3.5;  // colour-scale lower bound
+const COP_SCALE_HI = 7.0;  // colour-scale upper bound
 
 /* Leaflet.heat options
    Gradient: low intensity (0) → blue (high COP, cool climate)
@@ -148,6 +148,20 @@ const HEAT_OPTS = {
     1.00: '#a50026'
   }
 };
+
+function bindHeatZoomBehavior(map, heatLayer) {
+  function updateHeatStyle() {
+    const z = map.getZoom();
+    // Increase blur/radius with zoom so sparse 5° points stay visible.
+    const radius = Math.max(30, Math.min(80, 30 + (z - 2) * 4));
+    const blur = Math.max(18, Math.min(50, 18 + (z - 2) * 2));
+    heatLayer.setOptions({ radius, blur, maxZoom: 18, max: 1.0, minOpacity: 0.45 });
+    heatLayer.redraw();
+  }
+
+  map.on('zoomend', updateHeatStyle);
+  updateHeatStyle();
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    PROGRESS UI
@@ -260,7 +274,8 @@ function addLegend(map) {
   ctrl.onAdd = () => {
     const div = L.DomUtil.create('div', 'cop-legend');
     // 6 label ticks from top (blue = high COP) to bottom (red = low COP)
-    const ticks = [COP_SCALE_HI, 12, 9, 6, 4, COP_SCALE_LO];
+    const step = (COP_SCALE_HI - COP_SCALE_LO) / 5;
+    const ticks = Array.from({ length: 6 }, (_, i) => +(COP_SCALE_HI - i * step).toFixed(1));
     const barH  = (ticks.length - 1) * 18;
     const labelHTML = ticks.map((v, i) => {
       const s = i === 0 ? `&ge;${v}` : (i === ticks.length - 1 ? `&le;${v}` : `${v}`);
@@ -420,7 +435,8 @@ async function main() {
     /* 8. Heatmap */
     setStatus('Rendering heatmap&hellip;', 90);
     const heatArr = copData.map(d => [d.lat, d.lon, copToIntensity(d.cop)]);
-    L.heatLayer(heatArr, HEAT_OPTS).addTo(map);
+    const heatLayer = L.heatLayer(heatArr, HEAT_OPTS).addTo(map);
+    bindHeatZoomBehavior(map, heatLayer);
 
     // Label overlay on top of heatmap
     map.createPane('labels');
