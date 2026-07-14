@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Heat Pump COP Map</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Leaflet.heat -->
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+
+  <!-- TopoJSON client (for world-atlas land data) -->
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+
+  <!-- Turf.js (point-in-polygon for land masking) -->
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+  <!-- Pyodide (Python in browser) -->
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.27.5/full/pyodide.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; }
+
+    /* ── Map ──────────────────────────────────────────────────────── */
+    #map { height: 100vh; width: 100vw; }
+
+    /* ── Loading overlay ──────────────────────────────────────────── */
+    #overlay {
+      position: fixed; inset: 0;
+      background: rgba(12, 18, 28, 0.93);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 9999; color: #d8e8f4;
+      transition: opacity 0.6s ease;
+    }
+    #overlay h2 {
+      font-size: 1.4rem; font-weight: 600;
+      letter-spacing: 0.04em; margin-bottom: 0.5rem;
+    }
+    #overlay p {
+      font-size: 0.82rem; color: #6fa4c8; margin-bottom: 1.5rem;
+    }
+    #progress-wrap {
+      width: 300px; height: 5px;
+      background: rgba(255,255,255,0.12);
+      border-radius: 3px; overflow: hidden; margin-bottom: 1rem;
+    }
+    #progress-bar {
+      height: 100%; width: 0; border-radius: 3px;
+      background: linear-gradient(90deg, #4a8fd4, #7ecfea);
+      transition: width 0.35s ease;
+    }
+    #status-text { font-size: 0.82rem; color: #7aabcc; min-height: 1.2em; }
+
+    /* ── Legend (Leaflet control) ─────────────────────────────────── */
+    .cop-legend {
+      background: rgba(255,255,255,0.94);
+      border-radius: 8px; padding: 10px 13px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.22);
+      font-size: 0.76rem; line-height: 1.4;
+    }
+    .cop-legend h4 { font-size: 0.8rem; margin-bottom: 8px; color: #222; }
+    .legend-row { display: flex; gap: 8px; align-items: stretch; }
+    .legend-bar {
+      width: 14px; border-radius: 3px; flex-shrink: 0;
+      /* Top = blue (high COP), bottom = red (low COP) */
+      background: linear-gradient(to bottom,
+        #313695, #74add1, #ffffbf, #f46d43, #a50026);
+    }
+    .legend-labels {
+      display: flex; flex-direction: column;
+      justify-content: space-between;
+      font-size: 0.7rem; color: #444; padding: 1px 0;
+    }
+    .legend-note {
+      margin-top: 8px; padding-top: 6px;
+      border-top: 1px solid #ddd;
+      font-size: 0.67rem; color: #888; line-height: 1.5;
+    }
+
+    /* ── Info panel (Leaflet control) ─────────────────────────────── */
+    .cop-info {
+      background: rgba(255,255,255,0.94);
+      border-radius: 8px; padding: 8px 13px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.22);
+      font-size: 0.75rem; color: #444; line-height: 1.6;
+      max-width: 185px;
+    }
+    .cop-info .lbl { color: #999; }
+
+    /* ── Popup ────────────────────────────────────────────────────── */
+    .cop-popup h4 {
+      font-size: 0.88rem; font-weight: 600;
+      color: #1a3a5c; margin-bottom: 8px;
+    }
+    .cop-popup table {
+      border-collapse: collapse; width: 100%;
+      font-size: 0.8rem;
+    }
+    .cop-popup td { padding: 3px 5px 3px 0; vertical-align: top; }
+    .cop-popup td:first-child { color: #666; }
+    .cop-popup td:last-child  { font-weight: 600; text-align: right; padding-left: 8px; }
+    .cop-good { color: #1a6040; font-size: 1.05em; }
+    .cop-na   { color: #b03020; font-size: 0.82em; font-weight: 400; }
+    .popup-loading { color: #888; font-style: italic; font-size: 0.85rem; }
+    .popup-error   { color: #c00; font-size: 0.82rem; }
+  </style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="overlay">
+  <h2>Heat Pump COP Map</h2>
+  <p>R410A &bull; T<sub>supply</sub> = 12 &deg;C &bull; Open-Meteo current weather</p>
+  <div id="progress-wrap"><div id="progress-bar"></div></div>
+  <div id="status-text">Initialising&hellip;</div>
+</div>
+
+<!-- Map -->
+<div id="map"></div>
+
+<script>
+'use strict';
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONSTANTS
+═══════════════════════════════════════════════════════════════════════════ */
+const T_SUPPLY    = 12.0;   // fixed supply-air temperature (°C)
+const GRID_DEG    = 5;      // heatmap grid resolution (degrees)
+const BATCH_SZ    = 100;    // Open-Meteo locations per request
+const COP_SCALE_LO = 2.0;  // colour-scale lower bound
+const COP_SCALE_HI = 15.0; // colour-scale upper bound
+
+/* Leaflet.heat options
+   Gradient: low intensity (0) → blue (high COP, cool climate)
+             high intensity (1) → red (low COP, hot climate)  */
+const HEAT_OPTS = {
+  radius: 30, blur: 20, maxZoom: 18, max: 1.0, minOpacity: 0.45,
+  gradient: {
+    0.00: '#313695',
+    0.30: '#74add1',
+    0.52: '#ffffbf',
+    0.72: '#f46d43',
+    1.00: '#a50026'
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROGRESS UI
+═══════════════════════════════════════════════════════════════════════════ */
+function setStatus(msg, pct) {
+  document.getElementById('status-text').textContent = msg;
+  if (pct != null)
+    document.getElementById('progress-bar').style.width = pct + '%';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GRID GENERATION
+═══════════════════════════════════════════════════════════════════════════ */
+function generateGrid(deg) {
+  const pts = [];
+  for (let lat = -85 + deg / 2; lat < 85; lat += deg)
+    for (let lon = -180 + deg / 2; lon < 180; lon += deg)
+      pts.push({ lat: +(lat.toFixed(2)), lon: +(lon.toFixed(2)) });
+  return pts;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LAND FILTERING  (world-atlas 110m TopoJSON + Turf.js)
+═══════════════════════════════════════════════════════════════════════════ */
+async function filterToLand(pts) {
+  setStatus('Loading land mask…', 25);
+  const topo = await fetch(
+    'https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json'
+  ).then(r => r.json());
+
+  const land = topojson.feature(topo, topo.objects.land);
+  setStatus('Filtering to land-only…', 32);
+
+  return pts.filter(p =>
+    turf.booleanPointInPolygon(turf.point([p.lon, p.lat]), land)
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WEATHER FETCH  (Open-Meteo current weather, batched)
+═══════════════════════════════════════════════════════════════════════════ */
+async function fetchTemperatures(pts) {
+  const temps = new Array(pts.length).fill(null);
+  const nBatches = Math.ceil(pts.length / BATCH_SZ);
+
+  for (let b = 0; b < nBatches; b++) {
+    const i0    = b * BATCH_SZ;
+    const chunk = pts.slice(i0, i0 + BATCH_SZ);
+    const lats  = chunk.map(p => p.lat).join(',');
+    const lons  = chunk.map(p => p.lon).join(',');
+    const url   = `https://api.open-meteo.com/v1/forecast` +
+                  `?latitude=${lats}&longitude=${lons}&current_weather=true`;
+    try {
+      const data = await fetch(url).then(r => r.json());
+      const arr  = Array.isArray(data) ? data : [data];
+      arr.forEach((r, j) => {
+        const t = r?.current_weather?.temperature;
+        if (t != null) temps[i0 + j] = t;
+      });
+    } catch (e) {
+      console.warn('Weather batch error:', e);
+    }
+
+    const done = Math.min(i0 + BATCH_SZ, pts.length);
+    setStatus(`Fetching weather… ${done} / ${pts.length}`, 38 + Math.round(done / pts.length * 35));
+  }
+  return temps;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COP COMPUTATION
+═══════════════════════════════════════════════════════════════════════════ */
+function computeAll(calcCop, pts, temps) {
+  const out = [];
+  for (let i = 0; i < pts.length; i++) {
+    if (temps[i] == null) continue;
+    const cop = calcCop(T_SUPPLY, temps[i]);
+    if (cop == null || !Number.isFinite(cop) || cop <= 0) continue;
+    out.push({ lat: pts[i].lat, lon: pts[i].lon, T: temps[i], cop });
+  }
+  return out;
+}
+
+/** Map COP → Leaflet.heat intensity [0, 1].
+ *  Low COP (hot climate)  → intensity ≈ 1 → red.
+ *  High COP (cool climate) → intensity ≈ 0 → blue. */
+function copToIntensity(cop) {
+  const clamped = Math.max(COP_SCALE_LO, Math.min(cop, COP_SCALE_HI));
+  return (COP_SCALE_HI - clamped) / (COP_SCALE_HI - COP_SCALE_LO);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LEGEND CONTROL
+═══════════════════════════════════════════════════════════════════════════ */
+function addLegend(map) {
+  const ctrl = L.control({ position: 'bottomright' });
+  ctrl.onAdd = () => {
+    const div = L.DomUtil.create('div', 'cop-legend');
+    // 6 label ticks from top (blue = high COP) to bottom (red = low COP)
+    const ticks = [COP_SCALE_HI, 12, 9, 6, 4, COP_SCALE_LO];
+    const barH  = (ticks.length - 1) * 18;
+    const labelHTML = ticks.map((v, i) => {
+      const s = i === 0 ? `&ge;${v}` : (i === ticks.length - 1 ? `&le;${v}` : `${v}`);
+      return `<span>${s}</span>`;
+    }).join('');
+    div.innerHTML = `
+      <h4>Cooling COP</h4>
+      <div class="legend-row">
+        <div class="legend-bar" style="height:${barH}px"></div>
+        <div class="legend-labels" style="height:${barH}px">${labelHTML}</div>
+      </div>
+      <div class="legend-note">
+        R410A &bull; T<sub>sup</sub> = 12 &deg;C<br>
+        5&deg; grid &bull; click map for detail
+      </div>`;
+    return div;
+  };
+  ctrl.addTo(map);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   INFO PANEL CONTROL
+═══════════════════════════════════════════════════════════════════════════ */
+function addInfoPanel(map, copData) {
+  const cops   = copData.map(d => d.cop).sort((a, b) => a - b);
+  const median = cops[Math.floor(cops.length / 2)];
+
+  const ctrl = L.control({ position: 'topright' });
+  ctrl.onAdd = () => {
+    const div = L.DomUtil.create('div', 'cop-info');
+    div.innerHTML = `
+      <span class="lbl">Grid</span> ${GRID_DEG}&deg; &bull; ${copData.length} land pts<br>
+      <span class="lbl">COP range</span> ${cops[0].toFixed(1)} &ndash; ${cops[cops.length-1].toFixed(1)}<br>
+      <span class="lbl">Median COP</span> ${median.toFixed(1)}<br>
+      <span class="lbl">Weather</span> Open-Meteo current`;
+    return div;
+  };
+  ctrl.addTo(map);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CLICK-TO-QUERY HANDLER
+═══════════════════════════════════════════════════════════════════════════ */
+function setupClickHandler(map, calcCop) {
+  map.on('click', async e => {
+    const { lat, lng } = e.latlng;
+
+    const popup = L.popup({ maxWidth: 270 })
+      .setLatLng(e.latlng)
+      .setContent('<div class="popup-loading">Fetching weather&hellip;</div>')
+      .openOn(map);
+
+    try {
+      const url  = `https://api.open-meteo.com/v1/forecast` +
+                   `?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}&current_weather=true`;
+      const data = await fetch(url).then(r => r.json());
+      const T_amb = data?.current_weather?.temperature;
+
+      if (T_amb == null) {
+        popup.setContent('<div class="cop-popup"><p>No weather data at this location.</p></div>');
+        return;
+      }
+
+      const cop    = calcCop(T_SUPPLY, T_amb);
+      const T_evap = T_SUPPLY - 4;
+      const T_cond = T_amb   + 7;
+
+      let copCell;
+      if (cop == null || !Number.isFinite(cop) || cop <= 0) {
+        copCell = `<span class="cop-na">N/A &mdash; cycle infeasible<br>
+          (condenser pressure &le; evaporator pressure)</span>`;
+      } else {
+        copCell = `<span class="cop-good">${cop.toFixed(3)}</span>`;
+      }
+
+      const latStr = `${Math.abs(lat).toFixed(2)}&deg;&thinsp;${lat >= 0 ? 'N' : 'S'}`;
+      const lonStr = `${Math.abs(lng).toFixed(2)}&deg;&thinsp;${lng >= 0 ? 'E' : 'W'}`;
+
+      popup.setContent(`
+        <div class="cop-popup">
+          <h4>${latStr}, ${lonStr}</h4>
+          <table>
+            <tr><td>Ambient temperature</td><td>${T_amb.toFixed(1)} &deg;C</td></tr>
+            <tr><td>Evap. sat. temp. (T<sub>sup</sub>&minus;4)</td><td>${T_evap.toFixed(1)} &deg;C</td></tr>
+            <tr><td>Cond. sat. temp. (T<sub>amb</sub>+7)</td><td>${T_cond.toFixed(1)} &deg;C</td></tr>
+            <tr><td>Isentropic efficiency</td><td>75%</td></tr>
+            <tr><td>Cooling COP</td><td>${copCell}</td></tr>
+          </table>
+        </div>`);
+    } catch (err) {
+      popup.setContent(`<div class="popup-error">Error: ${err.message}</div>`);
+    }
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MAIN
+═══════════════════════════════════════════════════════════════════════════ */
+async function main() {
+  try {
+    /* 1. Pyodide */
+    setStatus('Loading Pyodide (~5 s)&hellip;', 5);
+    const pyodide = await loadPyodide();
+
+    setStatus('Loading numpy&hellip;', 10);
+    await pyodide.loadPackage(['numpy']);
+
+    /* 2. Fetch model code + lookup table in parallel */
+    setStatus('Fetching model and lookup table&hellip;', 14);
+    const [modelCode, npzBuf] = await Promise.all([
+      fetch('cop_model.py').then(r => r.text()),
+      fetch('r410a_props.npz').then(r => r.arrayBuffer()),
+    ]);
+
+    /* 3. Initialise model */
+    setStatus('Initialising thermodynamic model&hellip;', 20);
+    pyodide.runPython(modelCode);
+    pyodide.globals.set('_npz_bytes', new Uint8Array(npzBuf));
+    pyodide.runPython('load_lut_from_bytes(_npz_bytes)');
+    const calcCop = pyodide.globals.get('calculate_cop');
+
+    /* 4. Build map */
+    const map = L.map('map', { center: [20, 0], zoom: 2, minZoom: 2, maxZoom: 14 });
+
+    // Base layer (no labels — labels go on top of heatmap)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' +
+                   ' contributors &copy; <a href="https://carto.com/">CARTO</a>',
+      subdomains: 'abcd', maxZoom: 19
+    }).addTo(map);
+
+    /* 5. Land grid */
+    const landPts = await filterToLand(generateGrid(GRID_DEG));
+
+    /* 6. Weather */
+    setStatus(`Fetching weather for ${landPts.length} land points&hellip;`, 38);
+    const temps = await fetchTemperatures(landPts);
+
+    /* 7. COP */
+    setStatus('Computing COP&hellip;', 75);
+    const copData = computeAll(calcCop, landPts, temps);
+
+    /* 8. Heatmap */
+    setStatus('Rendering heatmap&hellip;', 90);
+    const heatArr = copData.map(d => [d.lat, d.lon, copToIntensity(d.cop)]);
+    L.heatLayer(heatArr, HEAT_OPTS).addTo(map);
+
+    // Label overlay on top of heatmap
+    map.createPane('labels');
+    map.getPane('labels').style.zIndex = 650;
+    map.getPane('labels').style.pointerEvents = 'none';
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
+      subdomains: 'abcd', maxZoom: 19, pane: 'labels'
+    }).addTo(map);
+
+    /* 9. Controls + interactions */
+    addLegend(map);
+    addInfoPanel(map, copData);
+    setupClickHandler(map, calcCop);
+
+    /* 10. Dismiss overlay */
+    setStatus('Ready', 100);
+    await new Promise(r => setTimeout(r, 350));
+    const ov = document.getElementById('overlay');
+    ov.style.opacity = '0';
+    setTimeout(() => ov.remove(), 700);
+
+  } catch (err) {
+    setStatus('Error: ' + err.message);
+    const bar = document.getElementById('progress-bar');
+    bar.style.background = '#c0392b';
+    console.error(err);
+  }
+}
+
+main();
+</script>
+</body>
+</html>
