@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <!-- Leaflet.heat -->`r`n
+
   <!-- TopoJSON client (for world-atlas land data) -->
   <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 
@@ -195,7 +195,9 @@ function buildValueLayer(map, copData) {
   });
 
   return group;
-}function setStatus(msg, pct) {
+}
+
+function setStatus(msg, pct) {
   document.getElementById('status-text').textContent = msg;
   if (pct != null)
     document.getElementById('progress-bar').style.width = pct + '%';
@@ -495,5 +497,7 @@ main();
 </script>
 </body>
 </html>
+
+
 
 
