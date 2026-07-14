@@ -129,7 +129,70 @@ const T_SUPPLY    = 12.0;   // fixed supply-air temperature (Â°C)
 const GRID_DEG    = 5;      // heatmap grid resolution (degrees)
 const BATCH_SZ    = 100;    // Open-Meteo locations per request
 const COP_SCALE_LO = 3.5;  // colour-scale lower bound
-const COP_SCALE_HI = 7.0;  // colour-scale upper bound
+
+const GRID_MARKER_BASE_RADIUS = 12;
+
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  return {
+    r: parseInt(h.slice(0, 2), 16),
+    g: parseInt(h.slice(2, 4), 16),
+    b: parseInt(h.slice(4, 6), 16)
+  };
+}
+
+function rgbToHex(r, g, b) {
+  const toHex = v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function copToColor(cop) {
+  const clamped = Math.max(COP_SCALE_LO, Math.min(cop, COP_SCALE_HI));
+  const t = (clamped - COP_SCALE_LO) / (COP_SCALE_HI - COP_SCALE_LO);
+  const stops = ['#a50026', '#f46d43', '#ffffbf', '#74add1', '#313695'];
+  const seg = Math.min(stops.length - 2, Math.floor(t * (stops.length - 1)));
+  const localT = (t * (stops.length - 1)) - seg;
+  const c0 = hexToRgb(stops[seg]);
+  const c1 = hexToRgb(stops[seg + 1]);
+  return rgbToHex(
+    lerp(c0.r, c1.r, localT),
+    lerp(c0.g, c1.g, localT),
+    lerp(c0.b, c1.b, localT)
+  );
+}
+
+function markerRadiusForZoom(z) {
+  return Math.max(5, Math.min(18, 5 + (z - 2) * 1.1));
+}
+
+function buildValueLayer(map, copData) {
+  const group = L.layerGroup();
+  const radius = markerRadiusForZoom(map.getZoom());
+
+  for (const d of copData) {
+    L.circleMarker([d.lat, d.lon], {
+      radius,
+      stroke: false,
+      fillOpacity: 0.78,
+      fillColor: copToColor(d.cop)
+    }).addTo(group);
+  }
+
+  map.on('zoomend', () => {
+    const r = markerRadiusForZoom(map.getZoom());
+    group.eachLayer(layer => {
+      if (layer && typeof layer.setRadius === 'function') {
+        layer.setRadius(r);
+      }
+    });
+  });
+
+  return group;
+}
 
 /* Leaflet.heat options
    Gradient: low intensity (0) â†’ blue (high COP, cool climate)
@@ -467,4 +530,5 @@ main();
 </script>
 </body>
 </html>
+
 
