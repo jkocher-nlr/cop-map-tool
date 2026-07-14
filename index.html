@@ -8,6 +8,8 @@
   <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Leaflet.heat -->`r`n
   <!-- TopoJSON client (for world-atlas land data) -->
   <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 
@@ -129,6 +131,7 @@ const T_SUPPLY    = 12.0;   // fixed supply-air temperature (Â°C)
 const GRID_DEG    = 5;      // heatmap grid resolution (degrees)
 const BATCH_SZ    = 100;    // Open-Meteo locations per request
 const COP_SCALE_LO = 3.5;  // colour-scale lower bound
+const COP_SCALE_HI = 7.0;  // colour-scale upper bound
 
 const GRID_MARKER_BASE_RADIUS = 12;
 
@@ -192,42 +195,7 @@ function buildValueLayer(map, copData) {
   });
 
   return group;
-}
-
-/* Leaflet.heat options
-   Gradient: low intensity (0) â†’ blue (high COP, cool climate)
-             high intensity (1) â†’ red (low COP, hot climate)  */
-const HEAT_OPTS = {
-  radius: 18, blur: 12, maxZoom: 18, max: 5.0, minOpacity: 0.45,
-  gradient: {
-    0.00: '#313695',
-    0.30: '#74add1',
-    0.52: '#ffffbf',
-    0.72: '#f46d43',
-    1.00: '#a50026'
-  }
-};
-
-function bindHeatZoomBehavior(map, heatLayer) {
-  function updateHeatStyle() {
-    const z = map.getZoom();
-    // Keep low-zoom colours from saturating red due to point overlap,
-    // while still expanding the footprint as you zoom in.
-    const radius = Math.max(16, Math.min(42, 16 + (z - 2) * 2));
-    const blur = Math.max(10, Math.min(28, 10 + (z - 2) * 1.4));
-    const max = Math.max(2.0, 5.0 - (z - 2) * 0.25);
-    heatLayer.setOptions({ radius, blur, maxZoom: 18, max, minOpacity: 0.45 });
-    heatLayer.redraw();
-  }
-
-  map.on('zoomend', updateHeatStyle);
-  updateHeatStyle();
-}
-
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   PROGRESS UI
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
-function setStatus(msg, pct) {
+}function setStatus(msg, pct) {
   document.getElementById('status-text').textContent = msg;
   if (pct != null)
     document.getElementById('progress-bar').style.width = pct + '%';
@@ -322,10 +290,7 @@ function computeAll(calcCop, pts, temps) {
 /** Map COP â†’ Leaflet.heat intensity [0, 1].
  *  Low COP (hot climate)  â†’ intensity â‰ˆ 1 â†’ red.
  *  High COP (cool climate) â†’ intensity â‰ˆ 0 â†’ blue. */
-function copToIntensity(cop) {
-  const clamped = Math.max(COP_SCALE_LO, Math.min(cop, COP_SCALE_HI));
-  return (COP_SCALE_HI - clamped) / (COP_SCALE_HI - COP_SCALE_LO);
-}
+
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    LEGEND CONTROL
