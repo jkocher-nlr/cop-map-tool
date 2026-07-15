@@ -171,12 +171,21 @@ function hexToRgb(hex) {
   };
 }
 
-function buildContinuousOverlay(map, copData) {
-  const width = 720;
-  const height = 360;
-  const maxDistDeg = 8.0;
+function buildContinuousOverlay(map, copData, opts = {}) {
+  const bounds = opts.bounds || L.latLngBounds([[-90, -180], [90, 180]]);
+  const width = Math.max(320, Math.round(opts.width ?? 720));
+  const height = Math.max(180, Math.round(opts.height ?? 360));
+  const maxDistDeg = opts.maxDistDeg ?? 8.0;
   const maxDist2 = maxDistDeg * maxDistDeg;
   const eps = 0.12;
+  const alpha = Math.max(0, Math.min(255, Math.round(opts.alpha ?? 210)));
+
+  const south = bounds.getSouth();
+  const north = bounds.getNorth();
+  const west = bounds.getWest();
+  const east = bounds.getEast();
+  const latRange = Math.max(1e-6, north - south);
+  const lonRange = Math.max(1e-6, east - west);
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -186,11 +195,11 @@ function buildContinuousOverlay(map, copData) {
   const data = img.data;
 
   for (let y = 0; y < height; y++) {
-    const lat = 90 - (y * 180) / (height - 1);
+    const lat = north - (y * latRange) / (height - 1);
     const latCos = Math.cos(lat * Math.PI / 180);
 
     for (let x = 0; x < width; x++) {
-      const lon = -180 + (x * 360) / (width - 1);
+      const lon = west + (x * lonRange) / (width - 1);
 
       let wSum = 0;
       let copSum = 0;
@@ -221,15 +230,68 @@ function buildContinuousOverlay(map, copData) {
       data[idx] = rgb.r;
       data[idx + 1] = rgb.g;
       data[idx + 2] = rgb.b;
-      data[idx + 3] = 210;
+      data[idx + 3] = alpha;
     }
   }
 
   ctx.putImageData(img, 0, 0);
-  return L.imageOverlay(canvas.toDataURL('image/png'), [[-90, -180], [90, 180]], {
-    opacity: 0.82,
-    interactive: false
+  return L.imageOverlay(canvas.toDataURL('image/png'), [[south, west], [north, east]], {
+    opacity: opts.opacity ?? 0.86,
+    interactive: false,
+    pane: opts.pane || 'overlayPane'
   });
+}
+
+function attachAdaptiveContourOverlay(map, copData) {
+  let overlay = null;
+  let rafId = null;
+
+  const redraw = () => {
+    rafId = null;
+
+    const zoom = map.getZoom();
+    const size = map.getSize();
+    const scale = Math.max(1.8, Math.min(5.0, 1.8 + (zoom - 2) * 0.6));
+    const width = Math.round(size.x * scale);
+    const height = Math.round(size.y * scale);
+    const pad = Math.max(0.18, 0.32 - zoom * 0.015);
+    const bounds = map.getBounds().pad(pad);
+    const maxDistDeg = Math.max(1.8, 8.0 - (zoom - 2) * 0.45);
+    const alpha = Math.round(Math.max(185, Math.min(230, 205 + (zoom - 2) * 4)));
+
+    const next = buildContinuousOverlay(map, copData, {
+      bounds,
+      width,
+      height,
+      maxDistDeg,
+      alpha,
+      opacity: 0.86
+    });
+
+    if (overlay) map.removeLayer(overlay);
+    overlay = next.addTo(map);
+  };
+
+  const requestRedraw = () => {
+    if (rafId != null) return;
+    rafId = requestAnimationFrame(redraw);
+  };
+
+  map.on('moveend zoomend resize', requestRedraw);
+  requestRedraw();
+
+  return {
+    redraw: requestRedraw,
+    remove() {
+      map.off('moveend zoomend resize', requestRedraw);
+      if (overlay) map.removeLayer(overlay);
+      overlay = null;
+      if (rafId != null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+    }
+  };
 }
 
 function setStatus(msg, pct) {
@@ -497,8 +559,7 @@ async function main() {
 
     /* 8. COP value layer */
     setStatus('Rendering contour map&hellip;', 90);
-    const contourLayer = buildContinuousOverlay(map, copData);
-    contourLayer.addTo(map);
+    const contourController = attachAdaptiveContourOverlay(map, copData);
 
     // Label overlay on top of heatmap
     map.createPane('labels');
@@ -532,6 +593,7 @@ main();
 </script>
 </body>
 </html>
+
 
 
 
