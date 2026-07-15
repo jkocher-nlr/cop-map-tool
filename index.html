@@ -459,7 +459,8 @@ async function main() {
 
     /* 8. COP value layer */
     setStatus('Rendering contour map&hellip;', 90);
-    const contourLayer = buildContinuousOverlay(map, copData);`r`n    contourLayer.addTo(map);
+    const contourLayer = buildContinuousOverlay(map, copData);
+    contourLayer.addTo(map);
 
     // Label overlay on top of heatmap
     map.createPane('labels');
@@ -493,6 +494,7 @@ main();
 </script>
 </body>
 </html>
+
 
 
 
