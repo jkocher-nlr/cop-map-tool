@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -23,10 +23,11 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; }
 
-    /* â”€â”€ Map â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ── Map ──────────────────────────────────────────────────────── */
     #map { height: 100vh; width: 100vw; }
+    .cop-grid-overlay { image-rendering: pixelated; }
 
-    /* â”€â”€ Loading overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ── Loading overlay ──────────────────────────────────────────── */
     #overlay {
       position: fixed; inset: 0;
       background: rgba(12, 18, 28, 0.93);
@@ -54,7 +55,7 @@
     }
     #status-text { font-size: 0.82rem; color: #7aabcc; min-height: 1.2em; }
 
-    /* â”€â”€ Legend (Leaflet control) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ── Legend (Leaflet control) ─────────────────────────────────── */
     .cop-legend {
       background: rgba(255,255,255,0.94);
       border-radius: 8px; padding: 10px 13px;
@@ -80,7 +81,7 @@
       font-size: 0.67rem; color: #888; line-height: 1.5;
     }
 
-    /* â”€â”€ Info panel (Leaflet control) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ── Info panel (Leaflet control) ─────────────────────────────── */
     .cop-info {
       background: rgba(255,255,255,0.94);
       border-radius: 8px; padding: 8px 13px;
@@ -90,7 +91,7 @@
     }
     .cop-info .lbl { color: #999; }
 
-    /* â”€â”€ Popup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ── Popup ────────────────────────────────────────────────────── */
     .cop-popup h4 {
       font-size: 0.88rem; font-weight: 600;
       color: #1a3a5c; margin-bottom: 8px;
@@ -124,11 +125,12 @@
 <script>
 'use strict';
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    CONSTANTS
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
-const T_SUPPLY    = 12.0;   // fixed supply-air temperature (Â°C)
-const GRID_DEG    = 5;      // heatmap grid resolution (degrees)
+═══════════════════════════════════════════════════════════════════════════ */
+const T_SUPPLY    = 12.0;   // fixed supply-air temperature (°C)
+const GRID_DEG    = 5;      // weather sampling grid resolution (degrees)
+const PLOT_GRID_DEG = 1;    // displayed COP raster resolution (degrees)
 const BATCH_SZ    = 100;    // Open-Meteo locations per request
 const COP_SCALE_LO = 3.5;  // colour-scale lower bound
 const COP_SCALE_HI = 7.0;  // colour-scale upper bound
@@ -171,47 +173,50 @@ function hexToRgb(hex) {
   };
 }
 
+function wrapLonDelta(lonA, lonB) {
+  let d = lonA - lonB;
+  if (d > 180) d -= 360;
+  if (d < -180) d += 360;
+  return d;
+}
+
 function buildContinuousOverlay(map, copData, opts = {}) {
   const bounds = opts.bounds || L.latLngBounds([[-90, -180], [90, 180]]);
-  const width = Math.max(320, Math.round(opts.width ?? 720));
-  const height = Math.max(180, Math.round(opts.height ?? 360));
-  const maxDistDeg = opts.maxDistDeg ?? 8.0;
+  const cellDeg = opts.cellDeg ?? PLOT_GRID_DEG;
+  const maxDistDeg = opts.maxDistDeg ?? 3.0;
   const maxDist2 = maxDistDeg * maxDistDeg;
-  const eps = 0.12;
-  const alpha = Math.max(0, Math.min(255, Math.round(opts.alpha ?? 210)));
+  const eps = 0.2;
+  const alpha = Math.max(0, Math.min(255, Math.round(opts.alpha ?? 230)));
 
   const south = bounds.getSouth();
   const north = bounds.getNorth();
   const west = bounds.getWest();
   const east = bounds.getEast();
-  const latRange = Math.max(1e-6, north - south);
-  const lonRange = Math.max(1e-6, east - west);
+
+  const cols = Math.max(1, Math.ceil((east - west) / cellDeg));
+  const rows = Math.max(1, Math.ceil((north - south) / cellDeg));
 
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = cols;
+  canvas.height = rows;
   const ctx = canvas.getContext('2d');
-  const img = ctx.createImageData(width, height);
+  const img = ctx.createImageData(cols, rows);
   const data = img.data;
 
-  for (let y = 0; y < height; y++) {
-    const lat = north - (y * latRange) / (height - 1);
-    const latCos = Math.cos(lat * Math.PI / 180);
+  for (let r = 0; r < rows; r++) {
+    const lat = north - (r + 0.5) * cellDeg;
+    const latCos = Math.max(0.1, Math.cos(lat * Math.PI / 180));
 
-    for (let x = 0; x < width; x++) {
-      const lon = west + (x * lonRange) / (width - 1);
-
+    for (let c = 0; c < cols; c++) {
+      const lon = west + (c + 0.5) * cellDeg;
       let wSum = 0;
       let copSum = 0;
-      let nearest = Infinity;
 
       for (let i = 0; i < copData.length; i++) {
         const p = copData[i];
         const dLat = lat - p.lat;
-        const dLon = (lon - p.lon) * latCos;
+        const dLon = wrapLonDelta(lon, p.lon) * latCos;
         const d2 = dLat * dLat + dLon * dLon;
-
-        if (d2 < nearest) nearest = d2;
         if (d2 > maxDist2) continue;
 
         const w = 1 / (d2 + eps);
@@ -219,8 +224,8 @@ function buildContinuousOverlay(map, copData, opts = {}) {
         copSum += p.cop * w;
       }
 
-      const idx = (y * width + x) * 4;
-      if (wSum === 0 || nearest > maxDist2) {
+      const idx = (r * cols + c) * 4;
+      if (wSum === 0) {
         data[idx + 3] = 0;
         continue;
       }
@@ -236,9 +241,10 @@ function buildContinuousOverlay(map, copData, opts = {}) {
 
   ctx.putImageData(img, 0, 0);
   return L.imageOverlay(canvas.toDataURL('image/png'), [[south, west], [north, east]], {
-    opacity: opts.opacity ?? 0.86,
+    opacity: opts.opacity ?? 0.9,
     interactive: false,
-    pane: opts.pane || 'overlayPane'
+    pane: opts.pane || 'overlayPane',
+    className: 'cop-grid-overlay'
   });
 }
 
@@ -248,24 +254,18 @@ function attachAdaptiveContourOverlay(map, copData) {
 
   const redraw = () => {
     rafId = null;
-
     const zoom = map.getZoom();
-    const size = map.getSize();
-    const scale = Math.max(1.8, Math.min(5.0, 1.8 + (zoom - 2) * 0.6));
-    const width = Math.round(size.x * scale);
-    const height = Math.round(size.y * scale);
-    const pad = Math.max(0.18, 0.32 - zoom * 0.015);
+    const pad = Math.max(0.12, 0.24 - zoom * 0.01);
     const bounds = map.getBounds().pad(pad);
-    const maxDistDeg = Math.max(1.8, 8.0 - (zoom - 2) * 0.45);
-    const alpha = Math.round(Math.max(185, Math.min(230, 205 + (zoom - 2) * 4)));
+    const maxDistDeg = Math.max(1.9, 3.2 - (zoom - 2) * 0.14);
+    const alpha = Math.round(Math.max(210, Math.min(240, 226 + (zoom - 2) * 2)));
 
     const next = buildContinuousOverlay(map, copData, {
       bounds,
-      width,
-      height,
+      cellDeg: PLOT_GRID_DEG,
       maxDistDeg,
       alpha,
-      opacity: 0.86
+      opacity: 0.9
     });
 
     if (overlay) map.removeLayer(overlay);
@@ -300,9 +300,9 @@ function setStatus(msg, pct) {
     document.getElementById('progress-bar').style.width = pct + '%';
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    GRID GENERATION
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+═══════════════════════════════════════════════════════════════════════════ */
 function generateGrid(deg) {
   const pts = [];
   for (let lat = -85 + deg / 2; lat < 85; lat += deg)
@@ -311,11 +311,11 @@ function generateGrid(deg) {
   return pts;
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    LAND FILTERING  (world-atlas 110m TopoJSON + Turf.js)
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+═══════════════════════════════════════════════════════════════════════════ */
 async function filterToLand(pts) {
-  setStatus('Loading land maskâ€¦', 25);
+  setStatus('Loading land mask…', 25);
   const topo = await fetch(
     'https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json'
   ).then(r => r.json());
@@ -326,7 +326,7 @@ async function filterToLand(pts) {
   const landPolys = Array.isArray(landFeature.features)
     ? landFeature.features
     : [landFeature];
-  setStatus('Filtering to land-onlyâ€¦', 32);
+  setStatus('Filtering to land-only…', 32);
 
   return pts.filter(p => {
     const pt = turf.point([p.lon, p.lat]);
@@ -341,9 +341,9 @@ async function filterToLand(pts) {
   });
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    WEATHER FETCH  (Open-Meteo current weather, batched)
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+═══════════════════════════════════════════════════════════════════════════ */
 async function fetchTemperatures(pts) {
   const temps = new Array(pts.length).fill(null);
   const nBatches = Math.ceil(pts.length / BATCH_SZ);
@@ -367,14 +367,14 @@ async function fetchTemperatures(pts) {
     }
 
     const done = Math.min(i0 + BATCH_SZ, pts.length);
-    setStatus(`Fetching weatherâ€¦ ${done} / ${pts.length}`, 38 + Math.round(done / pts.length * 35));
+    setStatus(`Fetching weather… ${done} / ${pts.length}`, 38 + Math.round(done / pts.length * 35));
   }
   return temps;
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    COP COMPUTATION
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+═══════════════════════════════════════════════════════════════════════════ */
 function computeAll(calcCop, pts, temps) {
   const out = [];
   for (let i = 0; i < pts.length; i++) {
@@ -386,14 +386,14 @@ function computeAll(calcCop, pts, temps) {
   return out;
 }
 
-/** Map COP â†’ Leaflet.heat intensity [0, 1].
- *  Low COP (hot climate)  â†’ intensity â‰ˆ 1 â†’ red.
- *  High COP (cool climate) â†’ intensity â‰ˆ 0 â†’ blue. */
+/** Map COP → Leaflet.heat intensity [0, 1].
+ *  Low COP (hot climate)  → intensity ≈ 1 → red.
+ *  High COP (cool climate) → intensity ≈ 0 → blue. */
 
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    LEGEND CONTROL
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+═══════════════════════════════════════════════════════════════════════════ */
 function addLegend(map) {
   const ctrl = L.control({ position: 'bottomright' });
   ctrl.onAdd = () => {
@@ -421,9 +421,9 @@ function addLegend(map) {
   ctrl.addTo(map);
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    INFO PANEL CONTROL
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+═══════════════════════════════════════════════════════════════════════════ */
 function addInfoPanel(map, copData) {
   const cops   = copData.map(d => d.cop).sort((a, b) => a - b);
   const median = cops[Math.floor(cops.length / 2)];
@@ -432,7 +432,7 @@ function addInfoPanel(map, copData) {
   ctrl.onAdd = () => {
     const div = L.DomUtil.create('div', 'cop-info');
     div.innerHTML = `
-      <span class="lbl">Grid</span> ${GRID_DEG}&deg; &bull; ${copData.length} land pts<br>
+      <span class="lbl">Grid</span> ${GRID_DEG}&deg; weather / ${PLOT_GRID_DEG}&deg; plotted &bull; ${copData.length} land pts<br>
       <span class="lbl">COP range</span> ${cops[0].toFixed(1)} &ndash; ${cops[cops.length-1].toFixed(1)}<br>
       <span class="lbl">Median COP</span> ${median.toFixed(1)}<br>
       <span class="lbl">Weather</span> Open-Meteo current`;
@@ -441,9 +441,9 @@ function addInfoPanel(map, copData) {
   ctrl.addTo(map);
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    CLICK-TO-QUERY HANDLER
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+═══════════════════════════════════════════════════════════════════════════ */
 function setupClickHandler(map, calcCop) {
   map.on('click', async e => {
     const { lat, lng } = e.latlng;
@@ -496,9 +496,9 @@ function setupClickHandler(map, calcCop) {
   });
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    MAIN
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+═══════════════════════════════════════════════════════════════════════════ */
 async function main() {
   try {
     /* 1. Pyodide */
@@ -525,7 +525,7 @@ async function main() {
     /* 4. Build map */
     const map = L.map('map', { center: [20, 0], zoom: 2, minZoom: 2, maxZoom: 14 });
 
-    // Base layer (no labels â€” labels go on top of heatmap)
+    // Base layer (no labels — labels go on top of heatmap)
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' +
                    ' contributors &copy; <a href="https://carto.com/">CARTO</a>',
